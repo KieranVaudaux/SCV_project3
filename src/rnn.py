@@ -5,23 +5,25 @@ from torch import nn
 from torch.nn import functional as F
 import pandas as pd
 
-class Gru(nn.Module):
-    def __init__(self, dim_input, dim_recurrent, num_layers, dim_output):
+
+class RecNet(nn.Module):
+    def __init__(self, dim_input, dim_recurrent, dim_output):
         super().__init__()
-        self.gru = nn.GRU(input_size = dim_input,
-            hidden_size = dim_recurrent,
-            num_layers = num_layers)
-        self.fc_y = nn.Linear(dim_recurrent, dim_output)
-    def forward(self, input):
-        # Get the last layer's last time step activation
-        output, _ = self.gru(input)
-        output = output[-1]
-        return self.fc_y(F.relu(output))
+        self.fc_x2h = nn.Linear(dim_input, dim_recurrent)
+        self.fc_h2h = nn.Linear(dim_recurrent, dim_recurrent)
+        self.fc_h2y = nn.Linear(dim_recurrent, dim_output)
+
+    def forward(self, input_):
+        h = input_.new_zeros(input_.size(0), self.fc_h2y.weight.size(1))
+        for t in range(input_.size(1)):
+            h = F.relu(self.fc_x2h(input_) + self.fc_h2h(h))
+        return self.fc_h2y(h)
+
 
 if __name__ == "__main__":
     dim_recs = [30, 40, 50]
     lrs = [1e-3, 1e-2, 1e-1]
-    window_size = 4
+    window_size = 2
     train_iters = 400
 
     df = utils.get_cointrin(remove_dubious=True)
@@ -41,7 +43,7 @@ if __name__ == "__main__":
             medians = []
             mads = []
             for _ in range(0, 10):
-                model = Gru(dim_input=9, dim_recurrent=dim, num_layers= 1, dim_output=1)
+                model = RecNet(dim_input=9, dim_recurrent=dim, dim_output=1)
 
                 mse_loss = nn.MSELoss()
                 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -52,16 +54,12 @@ if __name__ == "__main__":
                     window = df.loc[k * window_size : (k + 1) * window_size, :]
                     # window = df.sample(window_size)
                     input_ = torch.from_numpy(window.to_numpy()).float()
-                    input_ = input_.view(1,input_.shape[0], input_.shape[1])
-                    # print(input_.shape)
-                    target = torch.from_numpy(
-                        df.loc[
-                            (k + 1) * window_size + 1 : (k + 2) * window_size + 1, :
-                        ].TG.to_numpy()
-                    ).view(-1,1).float()
+                    target = (
+                        torch.from_numpy(df.loc[(k + 1) * window_size + 1 : (k + 2) * window_size + 1, :].TG.to_numpy())
+                        .view(-1, 1)
+                        .float()
+                    )
                     output = model(input_)
-
-                    # print("output: {}, target: {}".format(output, target))
 
                     # print(
                     #     "input: {}, output: {}, target: {}".format(
@@ -70,6 +68,7 @@ if __name__ == "__main__":
                     # )
                     loss = mse_loss(output, target)
                     losses.append(loss.detach().data)
+                    # print("output: {}, target: {}".format(output.data, target))
                     # print("iter: {}, loss: {:.2f}".format(k, loss))
                     optimizer.zero_grad()
                     loss.backward()
